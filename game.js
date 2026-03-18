@@ -16,6 +16,7 @@ import {
   clearCanvas, drawBorder, drawCheckerboard,
   drawEntitiesAsText, drawHighlight, drawHUD, drawGameOver,
 } from '@engine/render';
+import { drawTouchOverlay } from '@engine/touch';
 
 // --- Game Definition ---
 
@@ -352,9 +353,12 @@ game.system('render', function renderSystem(world, _dt) {
     drawGameOver(ctx, offsetX, offsetY, W, H, {
       title: 'CHECKMATE!',
       titleColor: '#ff4444',
-      subtitle: 'Press R to restart',
+      subtitle: 'Tap R to restart',
     });
   }
+
+  // Touch overlay (mobile)
+  drawTouchOverlay(ctx, ctx.canvas.width, ctx.canvas.height, { tapLabel: 'SEL' });
 });
 
 export default game;
