@@ -11,6 +11,7 @@
 
 import { defineGame } from '@engine/core';
 import { buildBoardMap, isLegalMove } from '@engine/board';
+import { pickBestMove } from '@engine/ai';
 import { consumeAction, moveCursor } from '@engine/input';
 import {
   clearCanvas, drawBorder, drawCheckerboard,
@@ -279,6 +280,117 @@ function handleSelectOrMove(world, cursorPos, state) {
     }
   }
 }
+
+// --- AI Auto-Play System ---
+
+const AI_DELAY = 600; // ms between AI moves
+
+game.resource('_aiTimer', { elapsed: 0 });
+
+game.system('ai', function aiSystem(world, dt) {
+  const state = world.getResource('state');
+  if (!state || state.gameOver) return;
+
+  const timer = world.getResource('_aiTimer');
+  timer.elapsed += dt;
+  if (timer.elapsed < AI_DELAY) return;
+  timer.elapsed = 0;
+
+  // AI plays for current side
+  const color = state.currentTurn;
+  const allPieces = world.query('Position', 'ChessPiece');
+  const board = buildBoardMap(world, 'ChessPiece');
+
+  // Gather all legal moves
+  const legalMoves = [];
+  for (const eid of allPieces) {
+    const piece = world.getComponent(eid, 'ChessPiece');
+    if (piece.color !== color) continue;
+    const pos = world.getComponent(eid, 'Position');
+
+    for (let tx = 0; tx < BOARD_WIDTH; tx++) {
+      for (let ty = 0; ty < BOARD_HEIGHT; ty++) {
+        if (tx === pos.x && ty === pos.y) continue;
+        if (isLegalMove(piece, pos.x, pos.y, tx, ty, board, MOVE_RULES, BOARD_GAME_CFG)) {
+          const target = board.get(`${tx},${ty}`);
+          legalMoves.push({ eid, pos, piece, tx, ty, target });
+        }
+      }
+    }
+  }
+
+  if (legalMoves.length === 0) return;
+
+  // Pick best move: prioritize captures > center control > random
+  const move = pickBestMove(legalMoves, (m) => {
+    let score = 0;
+    if (m.target && m.target.color !== color) {
+      score += (PIECE_VALUES[m.target.type] || 1) * 10;
+    }
+    // Center control bonus
+    const cx = Math.abs(m.tx - 3.5);
+    const cy = Math.abs(m.ty - 3.5);
+    score += (3.5 - cx) + (3.5 - cy);
+    // Small random factor for variety
+    score += Math.random() * 3;
+    return score;
+  });
+
+  // Execute the move (simulates select + move)
+  const cursorPos = { x: move.tx, y: move.ty };
+
+  // Handle castling
+  if (move.piece.type === 'king' && Math.abs(move.tx - move.pos.x) === 2) {
+    const dx = move.tx - move.pos.x;
+    const rookX = dx > 0 ? 7 : 0;
+    const rookNewX = dx > 0 ? move.tx - 1 : move.tx + 1;
+    for (const pid of allPieces) {
+      const ppos = world.getComponent(pid, 'Position');
+      const pp = world.getComponent(pid, 'ChessPiece');
+      if (pp.type === 'rook' && pp.color === move.piece.color && ppos.x === rookX && ppos.y === move.pos.y) {
+        ppos.x = rookNewX;
+        pp.hasMoved = true;
+        break;
+      }
+    }
+  }
+
+  // Capture
+  if (move.target && move.target.color !== color) {
+    for (const pid of allPieces) {
+      if (pid === move.eid) continue;
+      const ppos = world.getComponent(pid, 'Position');
+      if (ppos.x === move.tx && ppos.y === move.ty) {
+        const tp = world.getComponent(pid, 'ChessPiece');
+        world.emit('pieceCaptured', { type: tp.type, color: tp.color, value: PIECE_VALUES[tp.type] || 1 });
+        world.destroyEntity(pid);
+        if (tp.type === 'king') {
+          state.gameOver = true;
+          world.emit('checkmate');
+        }
+        break;
+      }
+    }
+  }
+
+  // Move piece
+  move.pos.x = move.tx;
+  move.pos.y = move.ty;
+  move.piece.hasMoved = true;
+
+  // Move cursor to show where AI moved
+  const cursors = world.query('Position', 'Cursor');
+  if (cursors.length > 0) {
+    const cp = world.getComponent(cursors[0], 'Position');
+    cp.x = move.tx;
+    cp.y = move.ty;
+  }
+
+  // Switch turns
+  state.currentTurn = color === 'white' ? 'black' : 'white';
+  state.moveCount = (state.moveCount || 0) + 1;
+  world.emit('moveMade', { nextTurn: state.currentTurn });
+});
 
 // --- Scoring System ---
 
